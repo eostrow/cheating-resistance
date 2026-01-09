@@ -1,0 +1,443 @@
+---
+title: "Ancestral, Direct, and Cross Resistance"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+Load libraries, set theme and working directory
+```{r}
+library(tidyverse)
+library(cowplot)
+library(glmmTMB)
+library(emmeans)
+library(scales) # formatting y-axis digits
+
+theme_set(theme_cowplot())
+my.cols <- c( CD1 = "#C06C63",CD2 = "#AFC377", CD3 = "#71B8CF", CD4 = "#E9A864", none= "gray50", "AX4" = "white") 
+```
+
+Figure 2: CD strains vs ancestor
+```{r}
+
+cd_data = read.table("datafiles/ancestor_resistance.txt", header=T, sep="\t")
+cd_data$spores_prct_unl = 1 - cd_data$spores_prct_gfp
+cd_data$strain_unl = factor(cd_data$strain_unl, levels=c("AX4", "CD1", "CD2", "CD3", "CD4"))
+
+ggplot(data=cd_data, aes(x=strain_unl, y=spores_prct_unl,fill=factor(strain_unl))) + 
+  geom_boxplot(outlier.shape=NA) + 
+  geom_jitter(width=0.1,size=2,alpha=0.2) +  
+  scale_fill_manual(values=my.cols) +
+  geom_hline(yintercept=0.5, lty=2) + theme_bw() + 
+  theme(axis.title = element_text(size = 16), 
+                     axis.text = element_text(size = 14),
+                     axis.text.x = element_text(angle = 45, hjust = 1),
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(), 
+                     axis.line = element_line(colour = "black")) +
+  ylab("Proportion of Total Spores") + xlab('Strain') + theme(legend.position = "none")
+
+```
+
+Statistics: CD strains
+```{r}
+
+fit1 = glmmTMB(spores_prct_unl ~ strain_unl + expt_date, data = cd_data, family=beta_family(link="logit"))
+emmeans(fit1, specs = trt.vs.ctrl ~ strain_unl)
+
+```
+
+Figure 3: Population Resistance
+```{r}
+
+in_pop_resist = read.table('datafiles/evolved_population_resistance.txt', sep='\t', header=T, stringsAsFactors = F, na.strings = c("NA"))
+
+data_sum = in_pop_resist %>% group_by(strain_unl, strain_gfp, evol_partner) %>% summarise(mean_prct_gfp_spores = mean(spores_prct_gfp), se_prct_gfp_spores = sd(spores_prct_gfp)/sqrt(length(spores_prct_gfp))) 
+
+# Filter data to AX4 (at) and each CD strain
+cd1_data_sum <- subset(data_sum, strain_unl == "CD1")
+cd2_data_sum <- subset(data_sum, strain_unl == "CD2")
+cd3_data_sum <- subset(data_sum, strain_unl == "CD3")
+cd4_data_sum <- subset(data_sum, strain_unl == "CD4")
+ax4_data_sum <- subset(data_sum, strain_unl == "AX4")
+
+# Get the value of the control mix (CD strain vs AX4G) to use as reference line
+cd1_no_evo_control = cd1_data_sum %>% filter(strain_gfp == 'AX4G') %>% pull(mean_prct_gfp_spores)
+cd2_no_evo_control = cd2_data_sum %>% filter(strain_gfp == 'AX4G') %>% pull(mean_prct_gfp_spores)
+cd3_no_evo_control = cd3_data_sum %>% filter(strain_gfp == 'AX4G') %>% pull(mean_prct_gfp_spores)
+cd4_no_evo_control = cd4_data_sum %>% filter(strain_gfp == 'AX4G') %>% pull(mean_prct_gfp_spores)
+ax4_no_evo_control = ax4_data_sum %>% filter(strain_gfp == 'AX4G') %>% pull(mean_prct_gfp_spores)
+
+make_resistance_plot <-function(input_data, nonevolved_control, strain_col, plot_title) {
+p = ggplot(data=input_data) + 
+  geom_col(aes(x=strain_gfp, y=mean_prct_gfp_spores, fill=factor(evol_partner)),col='black') +  
+  scale_fill_manual(values=c(strain_col, 'white'))  + 
+  scale_x_discrete(labels=c('Anc', '1', '2', '3', '4', '5', '6')) +
+  geom_errorbar(aes(x= strain_gfp, ymin = mean_prct_gfp_spores-se_prct_gfp_spores,                    
+    ymax = mean_prct_gfp_spores +      se_prct_gfp_spores), width=0.1) + 
+  geom_hline(yintercept = 0.5, lty=1, lwd=0.3, col='gray50') + 
+  geom_hline(yintercept = nonevolved_control, lty=2, col='black') + 
+  ylab('% GFP Spores') +
+  theme(axis.title.x=element_blank()) +
+  ggtitle(plot_title) + theme(plot.title = element_text(colour = strain_col, size=10, face='plain')) +
+  scale_colour_manual(values = my.cols) + 
+  scale_y_continuous(labels = function(x) paste0(round(as.numeric(x*100)), "%")) + 
+  theme(legend.position = 'none')+
+  theme(axis.title.x=element_blank())
+  return(p)
+}
+
+rCD1 = make_resistance_plot(cd1_data_sum, cd1_no_evo_control, my.cols[1], 'CD1-evolved')
+rCD2 = make_resistance_plot(cd2_data_sum, cd2_no_evo_control, my.cols[2], 'CD2-evolved')
+rCD3 = make_resistance_plot(cd3_data_sum, cd3_no_evo_control, my.cols[3], 'CD3-evolved')
+rCD4 = make_resistance_plot(cd4_data_sum, cd4_no_evo_control, my.cols[4], 'CD4-evolved')
+rAX4 = make_resistance_plot(ax4_data_sum, ax4_no_evo_control, 'gray70', 'AX4-evolved')
+
+plot_grid(rCD1, rCD2, rCD3, rCD4, rAX4, ncol=4, label_fontface = 'plain', label_size=2, hjust=0)
+
+```
+
+Statistics: Population Resistance
+```{r}
+
+set.seed(123456)
+
+# Filter data to AX4 and each CD strain
+cd1_data <- subset(in_pop_resist, strain_unl == "CD1")
+cd2_data <- subset(in_pop_resist, strain_unl == "CD2")
+cd3_data <- subset(in_pop_resist, strain_unl == "CD3")
+cd4_data <- subset(in_pop_resist, strain_unl == "CD4")
+ax4_data <- subset(in_pop_resist, strain_unl == "AX4")
+
+m_cd1 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd1_data,family=beta_family(link="logit"))
+mm_cd1 = emmeans(m_cd1, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd1)
+
+m_cd2 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd2_data,family=beta_family(link="logit"))
+mm_cd2 = emmeans(m_cd2, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd2)
+
+m_cd3 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd3_data,family=beta_family(link="logit"))
+mm_cd3 = emmeans(m_cd3, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd3)
+
+m_cd4 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd4_data,family=beta_family(link="logit"))
+mm_cd4 = emmeans(m_cd4, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd4)
+
+m_ax4 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = ax4_data,family=beta_family(link="logit"))
+mm_ax4 = emmeans(m_ax4, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_ax4) # NS
+
+ 
+```
+
+Figure 4: Evolved Isolate Resistance (data)
+```{r}
+
+in_resist = read.table('datafiles/evolved_isolates_resistance.txt', header=T, sep='\t', stringsAsFactors = F,na.strings = "NA") 
+
+# Drop any replicates if either strain did not develop clonally
+resist_filt= in_resist %>% filter(., spef_gfp > 0 & spef_unl > 0) %>% drop_na(spef_gfp, spef_unl) 
+
+## Create factor 'mixtype' to categorise different mixes
+resist = resist_filt %>% mutate(mixtype = 
+                    case_when(
+                    evol_partner == strain_unl ~ "Direct",
+                    strain_gfp=="AX4_G" & startsWith(strain_unl, "r") ~ "Res_vs_Anc",
+                    strain_gfp=="AX4_G" & startsWith(strain_unl, "CD") ~ "Cheat_vs_Anc",
+                    strain_gfp=="AX4_G" & strain_unl=='AX4' ~ "Anc_vs_Anc",
+                    evol_partner != strain_unl ~ "Cross",
+                           ))
+
+# Create "pop", which renames rCD2.1 to 1 and AX4_G to Anc, etc. for plotting purposes
+resist$pop = resist$strain_gfp
+resist = resist %>% mutate(pop = str_remove(pop, ".*\\.")) %>% mutate(pop = gsub("AX4_G", "Anc", pop))
+
+clonal_direct_all = resist %>% filter(mixtype=='Direct'|mixtype=='Cheat_vs_Anc'|mixtype=='Anc_vs_Anc') 
+
+# Average over replicates to create 'summarised' data
+clonal_direct_sum = clonal_direct_all %>% group_by(strain_unl, strain_gfp, evol_partner, mixtype, pop) %>% summarise(mean_prct_gfp_spores = mean(spores_prct_gfp, na.rm=T), se_prct_gfp_spores = sd(spores_prct_gfp)/sqrt(length(spores_prct_gfp)))
+
+clonal_direct_all = droplevels(clonal_direct_all)
+clonal_direct_sum = droplevels(clonal_direct_sum)
+
+```
+
+Figure 4: Evolved Isolate Resistance (subset / reference values)
+```{r}
+
+# Filter data to AX4 (anc) and each CD strain
+cd1_data <- subset(clonal_direct_all, strain_unl == "CD1")
+cd2_data <- subset(clonal_direct_all, strain_unl == "CD2")
+cd3_data <- subset(clonal_direct_all, strain_unl == "CD3")
+cd4_data <- subset(clonal_direct_all, strain_unl == "CD4")
+ax4_data <- subset(clonal_direct_all, strain_unl == "AX4")
+
+cd1_data_sum = subset(clonal_direct_sum, strain_unl=="CD1")
+cd2_data_sum = subset(clonal_direct_sum, strain_unl=="CD2")
+cd3_data_sum = subset(clonal_direct_sum, strain_unl=="CD3")
+cd4_data_sum = subset(clonal_direct_sum, strain_unl=="CD4")
+ax4_data_sum = subset(clonal_direct_sum, strain_unl=="AX4")
+
+# Info for reference line
+cd1_no_evo_control = cd1_data_sum %>% filter(strain_gfp == 'AX4_G') %>% pull(mean_prct_gfp_spores)
+cd2_no_evo_control = cd2_data_sum %>% filter(strain_gfp == 'AX4_G') %>% pull(mean_prct_gfp_spores)
+cd3_no_evo_control = cd3_data_sum %>% filter(strain_gfp == 'AX4_G') %>% pull(mean_prct_gfp_spores)
+cd4_no_evo_control = cd4_data_sum %>% filter(strain_gfp == 'AX4_G') %>% pull(mean_prct_gfp_spores)
+ax4_no_evo_control = ax4_data_sum %>% filter(strain_gfp == 'AX4_G') %>% pull(mean_prct_gfp_spores)
+```
+
+Figure 4: Evolved Isolate Resistance
+```{r}
+
+make_resistance_plot <-function(input_data, nonevolved_control, strain_col, plot_title) {
+p = ggplot(data=input_data) + 
+  geom_col(aes(x=strain_gfp, y=mean_prct_gfp_spores, fill=factor(evol_partner)),col='black') +  
+  scale_fill_manual(values=c(strain_col, 'white'))  + 
+  scale_x_discrete(labels=c('Anc', '1', '2', '3', '4', '5', '6')) +
+  geom_errorbar(aes(x= strain_gfp, ymin = mean_prct_gfp_spores-se_prct_gfp_spores, 
+                    ymax =         mean_prct_gfp_spores+se_prct_gfp_spores), width=0.1) + 
+  geom_hline(yintercept = 0.5, lty=1, lwd=0.3, col='gray50') + 
+  geom_hline(yintercept = nonevolved_control, lty=2, col='black') + 
+  ylab('% GFP spores') + 
+  ggtitle(plot_title) + theme(plot.title = element_text(colour = strain_col, size=10, face='plain')) +
+  scale_colour_manual(values = my.cols) + 
+  scale_y_continuous(labels = function(x) paste0(round(as.numeric(x*100)), "%")) + 
+  theme(legend.position = 'none')+
+  theme(axis.title.x=element_blank())
+  return(p)
+}
+
+rCD1 = make_resistance_plot(cd1_data_sum, cd1_no_evo_control, my.cols[1], 'CD1-evolved')
+rCD2 = make_resistance_plot(cd2_data_sum, cd2_no_evo_control, my.cols[2], 'CD2-evolved')
+rCD3 = make_resistance_plot(cd3_data_sum, cd3_no_evo_control, my.cols[3], 'CD3-evolved')
+rCD4 = make_resistance_plot(cd4_data_sum, cd4_no_evo_control, my.cols[4], 'CD4-evolved')
+rAX4 = make_resistance_plot(ax4_data_sum, ax4_no_evo_control, 'gray70', 'AX4-evolved')
+
+plot_grid(rCD1, rCD2, rCD3, rCD4, rAX4, ncol=4, label_fontface = 'plain', label_size=2, hjust=0)
+
+
+```
+
+Statistics: Evolved Isolate Resistance
+```{r}
+
+set.seed(123456)
+
+library(emmeans)
+
+m_cd1 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd1_data,family=beta_family(link="logit"))
+mm_cd1 = emmeans(m_cd1, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd1) # cd1-evolved significantly different from ax4
+
+m_cd2 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd2_data,family=beta_family(link="logit"))
+mm_cd2 = emmeans(m_cd2, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd2) # cd2-evolved not significantly different from ax4
+
+# Looks like not significant primarily because of one strain, rCD2.6. Let's see if that's true:
+cd2_wo_pop6 = cd2_data %>% filter(strain_gfp!='rCD2.6')
+m_cd2_wo_pop6 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd2_wo_pop6,family=beta_family(link="logit"))
+mm_cd2_wo_pop6 = emmeans(m_cd2_wo_pop6, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd2_wo_pop6) # cd2-evolved significantly different from ax4
+
+m_cd3 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd3_data,family=beta_family(link="logit"))
+mm_cd3 = emmeans(m_cd3, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd3) # cd3-evolved significantly different from ax4
+
+m_cd4 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd4_data,family=beta_family(link="logit"))
+mm_cd4 = emmeans(m_cd4, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd4) # cd4-evolved NOT significantly different from ax4
+
+# Looks like not significant primarily because of one strain, rCD4.4. Let's see if that's true
+cd4_wo_pop4 = cd4_data %>% filter(strain_gfp!='rCD4.4')
+
+m_cd4_wo_pop4 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = cd4_wo_pop4,family=beta_family(link="logit"))
+mm_cd4_wo_pop4 = emmeans(m_cd4_wo_pop4, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_cd4_wo_pop4) # Still NS -- no, wasn't just this one pop
+
+# Using strain as a fixed effect, let's compare each strain to the ancestor, AX4_G
+m_cd4 = glmmTMB(spores_prct_gfp ~ strain_gfp + exp_date , data = cd4_data,family=beta_family(link="logit"))
+mm_cd4 = emmeans(m_cd4, specs = trt.vs.ctrl ~ strain_gfp, ref=1) 
+summary(mm_cd4)  # None are significant 
+
+m_ax4 = glmmTMB(spores_prct_gfp ~ evol_partner + (1|evol_partner/strain_gfp) + exp_date, data = ax4_data,family=beta_family(link="logit"))
+mm_ax4 = emmeans(m_ax4, specs = trt.vs.ctrl ~ evol_partner) 
+summary(mm_ax4) # AX4-evolved significantly different from AX4 (i.e, their anc)
+
+```
+
+Figure 5: Local Adaptation (data)
+```{r}
+
+# Filter to just cross-resistance assays. 
+in_cross_assays = resist %>% filter(expt_category=='cross')
+
+# Create and assign 'mixtype'
+cross_assays = in_cross_assays %>% 
+  mutate(mixtype = 
+    case_when(evol_partner == strain_unl ~ "Direct",
+                              strain_gfp=="AX4_G" & startsWith(strain_unl, "r") ~ "Res_vs_Anc",
+                              strain_gfp=="AX4_G" & startsWith(strain_unl, "CD") ~ "Cheat_vs_Anc",
+                              strain_gfp=="AX4_G" & strain_unl=='AX4' ~ "Anc_vs_Anc",
+                              evol_partner != strain_unl ~ "Cross",
+                                  )
+                              )
+
+# Filter
+all_raw = cross_assays %>% filter(strain_unl!='CD4') %>% filter(., spef_gfp > 0 & spef_unl > 0) %>% drop_na(spef_gfp, spef_unl) 
+
+```
+
+Figure 5: Local Adaptation (summarise data)
+```{r} 
+
+all_sum = all_raw %>% group_by(strain_unl, strain_gfp,evol_partner,mixtype) %>% 
+  summarise(mean_spores_prct_gfp = mean(spores_prct_gfp,na.rm=T))
+
+all_raw = droplevels(all_raw)
+all_sum = droplevels(all_sum)
+
+data_for_anova = all_raw %>% filter(mixtype=='Direct' | mixtype=='Cross')  # just evolved strains
+
+data_for_anova$mixtype = factor(data_for_anova$mixtype) 
+data_for_anova$strain_gfp = factor(data_for_anova$strain_gfp)
+data_for_anova$strain_unl = factor(data_for_anova$strain_unl)
+data_for_anova$expt_date = factor(data_for_anova$exp_date) 
+data_for_anova$evol_partner = factor(data_for_anova$evol_partner)
+
+data_for_anova$strain_gfp = droplevels(data_for_anova$strain_gfp)
+data_for_anova$strain_unl = droplevels(data_for_anova$strain_unl)
+data_for_anova$expt_date = droplevels(data_for_anova$expt_date)
+data_for_anova$evol_partner = droplevels(data_for_anova$evol_partner)
+
+```
+
+Figure 5: Local Adaptation (plot)
+```{r}
+
+my.cols <- c( CD1 = "#C06C63",CD2 = "#AFC377", CD3 = "#71B8CF", "AX4" ="black") 
+
+all_sum$type <- ifelse(all_sum$strain_unl == all_sum$evol_partner, "Sympatric", "Allopatric")
+all_sum$type <- ifelse(all_sum$strain_gfp == "AX4_G", "Ancestor", all_sum$type)
+all_sum$type <- factor(all_sum$type, levels=c("Ancestor", "Sympatric", "Allopatric"))
+
+# Average across strains as a function of whether they are an "ancestor", "experienced", or "naive" strain (where the latter two evolved with or without that cheater)
+agg = all_sum %>% group_by(strain_unl, type) %>% summarise(mean=mean(mean_spores_prct_gfp, na.rm=TRUE), se=sd(mean_spores_prct_gfp, na.rm=TRUE)/sqrt(length(mean_spores_prct_gfp)))
+
+ggplot(agg, aes(y=mean, x=type)) +
+ geom_errorbar(aes(ymin=mean-se, ymax=mean+se,colour=strain_unl,alpha=0.005),width=.1, show.legend = F) +
+           labs(y = "\nProportion of Spores\n", x = "\n", color = "Partner") +
+ geom_point(aes(color = strain_unl),size=2,show.legend=F)+
+ geom_line(aes(group = strain_unl,color =strain_unl), size = 1) +
+  scale_colour_manual(values=my.cols) +
+ labs(y = "\nProportion of Spores\n", x = "\n", color = "Partner") +
+ theme_bw() + theme(axis.title = element_text(size = 16),
+                  axis.text = element_text(size = 14),
+                    axis.text.x = element_text(angle = 45, hjust = 1),
+                    panel.grid.major = element_blank(),
+                    panel.grid.minor = element_blank(),
+                    axis.line = element_line(colour = "black"))
+
+```
+
+Figure 6: Direct vs. Cross Resistance (data)
+```{r}
+
+my.cols <- c( CD1 = "#C06C63",CD2 = "#AFC377", CD3 = "#71B8CF", "AX4" ="white") 
+
+data_for_plot = all_sum %>% filter(mixtype=='Direct' | mixtype=='Cross')  
+
+ggplot(data_for_plot, aes(y=mean_spores_prct_gfp, x=mixtype)) +
+    geom_boxplot(aes(fill=strain_unl), outlier.shape=NA) + 
+    geom_jitter(size=2,width=.1, colour ="black",alpha=0.2,show.legend=F) +
+  scale_fill_manual(values=my.cols) +
+  facet_grid(~ strain_unl) +
+  labs(y = "\nProportion of Spores\n when mixed with indicated partner", x = "\n", color = "Partner") +
+  theme_bw() + theme(axis.title = element_text(size = 16), 
+                     axis.text = element_text(size = 14),
+                     axis.text.x = element_text(angle = 45, hjust = 1),
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(), 
+                     axis.line = element_line(colour = "black"),
+                     legend.position = "NONE") +
+  xlab('Resistance Type')
+
+```
+
+Statistics: Direct vs. Cross Resistance (linear model)
+```{r}
+
+mod.final = glmmTMB(spores_prct_gfp ~ mixtype + (1|strain_unl) + (1|strain_gfp) + exp_date, REML=T,data = data_for_anova,family=beta_family(link="logit"))
+contrast_mixtype = emmeans(mod.final, specs = trt.vs.ctrl ~ mixtype) 
+summary(contrast_mixtype)
+
+```
+
+Statistics: Direct vs. Cross Resistance (bootstrap)
+```{r}
+# Need to use the "direct" resistance assays that were carried out side-by-side with cross-resistance assays.
+# This means subsetting from cross_sum those assays 
+
+# So, subset from cross_sum:
+direct = subset(all_sum, mixtype=='Direct')
+cross = subset(all_sum, mixtype=='Cross')
+
+both = rbind(direct, cross)
+num_c=length(cross$mean_spores_prct_gfp)
+num_d=length(direct$mean_spores_prct_gfp)
+
+n=10000 # number of times to resample
+boot.t <- c(1:n)
+for (i in 1:n){
+  curr_sample <- sample(both$mean_spores_prct_gfp, replace=TRUE)
+  boot.t[i] = mean(curr_sample[1:num_d]) - mean(curr_sample[(num_d+1):length(curr_sample)])
+}
+
+obs=mean(direct$mean_spores_prct_gfp) - mean(cross$mean_spores_prct_gfp)
+p.h0 = length(boot.t[boot.t>obs])/(n+1) # P of one-sided t-test
+
+hist(boot.t,20,  col='dodgerblue3', xlab='direct - cross', main='Bootstrap Randomization:\nIs Direct Resistance Greater than Cross Resistance?')
+abline(v=obs, lty=2)
+
+```
+
+Statistics: Direct vs cross resistance (summary data)
+```{r}
+
+# Get mean AX4_G data:
+anc_data = all_sum %>% filter(strain_gfp=='AX4_G') %>% select(mean_spores_prct_gfp)
+
+#  strain_unl strain_gfp evol_partner mean_spores_prct_gfp
+#  <chr>      <chr>      <chr>                       <dbl>
+#1 AX4        AX4_G      NONE                        0.405
+#2 CD1        AX4_G      NONE                        0.355
+#3 CD2        AX4_G      NONE                        0.401
+#4 CD3        AX4_G      NONE                        0.372
+
+evo_data = all_sum %>% filter(mixtype=='Direct') %>% group_by(strain_unl) %>% summarise(mean_rCD = mean(mean_spores_prct_gfp))
+
+# strain_unl     mean_rCD
+# AX4	          0.5254100			
+# CD1	          0.4576333			
+# CD2	          0.4619458			
+# CD3	          0.4937194	
+
+diff = evo_data[,2] - anc_data[,4] # difference between evolved and ancestral %gfp spores with a given partner
+grand_mean_imporove = diff %>% summarise(across(where(is.numeric), ~mean(.x, na.rm=T))) # take mean
+
+#mean_rCD
+#<dbl>
+#0.1015697
+
+# So, magnitude of direct benefit vs overall evolution:
+perc_of_improve = obs/grand_mean_imporove
+
+#mean_rCD
+#<dbl>
+#0.3311845	
+
+```
+
+
+

@@ -1,0 +1,298 @@
+---
+title: "Tests of life-history trade-offs"
+author: "Elizabeth Ostrowski"
+date: "08/09/2023"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Load packages
+```{r}
+library(tidyverse)
+require(ggplot2)
+require(cowplot)
+library(glmmTMB)
+library(emmeans)
+
+# X <- df[, c("mean_spef","mean_germ")]
+# md <- mahalanobis(X, colMeans(X), cov(X))
+# cutoff <- qchisq(0.975, df=2)   # ≈ 5.99
+# df$outlier <- md > cutoff
+# 
+# library(ggplot2)
+# 
+# ggplot(df, aes(x=mean_germ, y=mean_spef))+
+#  geom_point(aes(color=outlier), size=3)+
+#  geom_smooth(data=df, method="lm", se=FALSE, color="black")+
+#  geom_smooth(data=df_no_out, method="lm", se=FALSE, color="red", linetype="dashed")+
+#  theme_bw(base_size=14)
+# 
+# X <- df[, c("mean_spef","mean_germ")]
+# md <- mahalanobis(X, colMeans(X), cov(X))
+# cutoff <- qchisq(0.975, df=2)   # ≈ 5.99
+# df$outlier <- md > cutoff
+
+
+```
+
+Plotting
+```{r}
+strains <- c( AX4 = "rAX4", CD1 = "rCD1",CD2 = "rCD2", CD3 = "rCD3", CD4 = "rCD4", Control = "WT Control") 
+colours <- c(rCD1 = "#C06C63",rCD2 = "#AFC377", rCD3 = "#71B8CF", rCD4 = "#E9A864", rAX4 = "black") 
+```
+
+Read and clean doubling time (dt) data
+```{r}
+
+#Read in data
+dt = read.table("datafiles/doubling_times.txt", header=T, sep="\t")
+
+dt$evol_group <- recode_factor(dt$evol_group, CD1="rCD1", CD2="rCD2", CD3="rCD3", CD4="rCD4", AX4 = "rAX4") # rename & reorder levels
+
+# Set a reference line for the ancestor
+dt_anc_value <-  as.numeric(dt %>% filter(strain=="AX4_GFP") %>% summarise(mean_dt=mean(dt, na.rm=T)))
+
+# Average across replicates (= dt_sum)
+dt_sum = dt %>% group_by(strain, evol_group) %>% summarise(mean_dt = mean(dt, na.rm=T)) 
+
+# For plotting, we will filter to remove non-evolved strains
+dt_for_plot = dt_sum %>% filter(., grepl("r",strain)) # strains that start with "r" (=evolved)
+```
+
+Read and summarise sporulation efficiency (spef) data
+```{r}
+
+resist = read.table('datafiles/evolved_isolates_resistance.txt', header=T, sep='\t', stringsAsFactors = F,na.strings = "NA") 
+
+# Columns show the clonal sporulation efficiency of each strain, but that strain was mixed with multiple strains in each block, so we want just the unique values, representing clonal sporulation of that strain on that day. Need to do separately for the unlabeled ("unl") and labeled ("gfp") strains & then merge
+spef_unl_unique = resist %>% group_by(strain_unl) %>% dplyr::select(strain_unl, spef_unl, exp_date) %>% unique
+spef_gfp_unique = resist %>% group_by(strain_gfp) %>% dplyr::select(strain_gfp, spef_gfp, exp_date, evol_partner) %>% unique
+
+names(spef_unl_unique) = c('strain', 'spef', 'expt_date')
+names(spef_gfp_unique) = c('strain', 'spef', 'expt_date', 'evol_partner')
+spef_raw = rbind(spef_gfp_unique, spef_unl_unique) 
+
+spef = spef_raw %>% group_by(strain) %>% summarise(mean_spef = mean(spef, na.rm=T)) 
+
+# Recode the evol_partner column: 
+spef_sum = spef %>%
+  mutate(evol_group =
+    case_when(
+        startsWith(strain, "rCD1") ~ "rCD1",
+        startsWith(strain, "rCD2") ~ "rCD2",
+        startsWith(strain, "rCD3") ~ "rCD3",
+        startsWith(strain, "rCD4") ~ "rCD4",
+        startsWith(strain, "rAX4") ~ "rAX4",
+        strain=='AX4' ~ "wt",
+        strain=="AX4_G" ~ "anc",
+        startsWith(strain, "CD") ~ "cheater",
+                                  )
+  )
+                                           
+spef_anc_value = subset(spef_sum, evol_group=="anc")$mean_spef
+spef_for_plot = subset(spef_sum, evol_group!="anc" & evol_group!="wt" & evol_group!="cheater")
+spef_for_plot$evol_group <- recode_factor(spef_for_plot$evol_group, CD1="rCD1", CD2="rCD2", CD3="rCD3", CD4="rCD4", AX4 = "rAX4") # rename & reorder levels
+```
+
+Read and summarise germination efficiency (germ) data
+```{r}
+
+germ_raw = read.table("datafiles/germination.txt", sep='\t', header=T)
+names(germ_raw)[4] = c('evol_group') # rename columns
+germ_raw$prct_germ <- (germ_raw$spores.start - germ_raw$spores.end)/germ_raw$spores.start
+
+germ = germ_raw %>% group_by(strain, evol_group) %>% summarise(cnt=n(), mean_germ = mean(prct_germ, na.rm=T))
+
+germ_sum = germ %>%
+  mutate(evol_group =
+    case_when(
+        startsWith(strain, "rCD1") ~ "rCD1",
+        startsWith(strain, "rCD2") ~ "rCD2",
+        startsWith(strain, "rCD3") ~ "rCD3",
+        startsWith(strain, "rCD4") ~ "rCD4",
+        startsWith(strain, "rAX4") ~ "rAX4",
+        strain=='AX4' ~ "wt",
+        strain=="AX4_G" ~ "anc",
+        startsWith(strain, "CD") ~ "cheater",
+                                  )
+  )
+
+germ_anc_value = germ_sum[germ_sum$strain=="AX4",]$mean_germ
+germ_for_plot = germ_sum %>% filter(., evol_group != "anc" & evol_group != "wt" & evol_group != "cheater")
+germ_for_plot$evol_group <- recode_factor(germ_for_plot$evol_group, CD1="rCD1", CD2="rCD2", CD3="rCD3", CD4="rCD4", AX4 = "rAX4") # rename & reorder levels
+
+```
+
+Figure 7A, doubling time 
+```{r}
+
+p.dt<-ggplot(data=dt_for_plot) + 
+  geom_boxplot(aes(x=evol_group, y=mean_dt,  col='white'), outlier.shape=NA, show.legend=F) + 
+  geom_jitter (aes(x=evol_group, y=mean_dt, col=evol_group), width=0.1, size=2.5, alpha=0.7, show.legend=F) + 
+  theme_cowplot() + ylim(5,16) +
+  scale_fill_manual(values=colours) + 
+  labs(y = "\nDoubling Time (hours)", x="Evolution Group") +
+  scale_colour_manual(values=colours) + 
+  geom_hline(yintercept = dt_anc_value, lty=2) + 
+  theme(axis.title = element_text(size = 12), 
+                     axis.text = element_text(size = 12),
+                     panel.grid.major = element_blank(), 
+                     panel.grid.minor = element_blank(),
+                     axis.text.x = element_text(angle = 45, hjust = 1),
+                     axis.line = element_line(colour = "black")) 
+
+```
+
+Figure 7B, sporulation efficiency ('spef')
+```{r}
+
+p.spef<-ggplot(data=spef_for_plot) + 
+  geom_boxplot(aes(x=evol_group, y=mean_spef, col='white'), outlier.shape = NA, show.legend=F) + 
+  geom_jitter(aes(x=evol_group, y=mean_spef, col=evol_group), width=0.1, size=2.5, alpha=0.7, show.legend=F) + 
+  theme_cowplot()  +
+  labs(y = "Sporulation Efficency", x=" Evolution Group") + 
+  scale_colour_manual(values=colours) + 
+  geom_hline(yintercept = spef_anc_value, lty=2) + 
+  theme(axis.title = element_text(size = 12), 
+                     axis.text = element_text(size = 12),
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(),
+                     axis.text.x = element_text(angle = 45, hjust = 1),
+                     axis.line = element_line(colour = "black")) 
+
+```
+
+Figure 7C, Germination efficiency
+```{r}
+
+p.germ<-ggplot(data=germ_for_plot) + 
+  geom_boxplot(aes(x=evol_group, y=mean_germ, col='white'), outlier.shape=NA, show.legend=F) +
+  geom_jitter (aes(x=evol_group, y=mean_germ, col=evol_group), width=0.1, size=2.5, alpha=0.7, show.legend=F) + 
+  theme_cowplot() + ylim(0.7,1)+
+  labs(y="Germination Efficiency", x=" Evolution Group") +
+  scale_colour_manual(values=colours) + 
+  geom_hline(yintercept = germ_anc_value, lty=2) + 
+  theme(axis.title = element_text(size = 12), 
+                     axis.text = element_text(size = 12),
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(),
+                     axis.text.x = element_text(angle = 45, hjust = 1),
+                     axis.line = element_line(colour = "black")) 
+```
+
+Figure 7D, Correlation between sporulation and germination
+```{r}
+
+data_1 = merge(spef_sum, germ_sum, by="strain")
+data_2 = merge(data_1, dt_sum, by="strain")
+data_all = data_2 %>% select(strain, evol_group.x, mean_spef, mean_germ, mean_dt) %>% rename(evol_group=evol_group.x)
+data_evolved_only = data_all %>% filter(., grepl("r", strain))
+
+# Correlations among all strains
+cor.test(data_all[,3], data_all[,4]) # corr betw spef and germ: r=-0.35, p=0.04
+cor.test(data_all[,3], data_all[,5]) # corr betw spef and dt: r=-0.04, p=0.82
+cor.test(data_all[,4], data_all[,5]) # corr betw germ and dt: r=-0.07, p=0.68
+
+# Correlations among the evolved strains only
+cor.test(data_evolved_only[,3], data_evolved_only[,4]) # corr betw spef and germ: r=-0.24, p=0.21
+cor.test(data_evolved_only[,3], data_evolved_only[,5]) # corr betw spef and dt: r=-0.01, p=0.94
+cor.test(data_evolved_only[,4], data_evolved_only[,5]) # corr betw germ and dt: r=-0.09, p=0.63
+
+# Correlations among cheater-evolved strains only
+data_evo_rm_rAX4 = subset(data_evolved_only, data_evolved_only$evol_group!='rAX4')
+cor.test(data_evo_rm_rAX4[,3], data_evo_rm_rAX4[,4]) # corr betw spef and germ: r=-0.399, df=22, p=0.053
+cor.test(data_evo_rm_rAX4[,3], data_evo_rm_rAX4[,5]) # corr betw spef and dt: r=0.003, df=22, p=0.988
+cor.test(data_evo_rm_rAX4[,4], data_evo_rm_rAX4[,5]) # corr betw germ and dt: r=0.018, df=22, p=0.935
+
+
+colours <- c(rCD1 = "#C06C63",rCD2 = "#AFC377", rCD3 = "#71B8CF", rCD4 = "#E9A864", rAX4 = "black", wt="dodgerblue2", "cheater" = "firebrick2") 
+
+ggplot(data=data_all, aes(x=mean_spef, y=mean_germ,col=evol_group)) + geom_smooth(method='lm',col="black", lwd=0.5,fill="grey") + geom_point() + xlab('Sporulation Efficiency') + ylab('Germination Efficiency') + scale_colour_manual(values=colours) + theme_cowplot() + theme(legend.position = c(0.8,0.85),legend.key.size = unit(0.3,"cm"), legend.text = element_text(size=6), legend.title=element_blank(),legend.spacing.y = unit(0, 'cm')) + guides(fill = guide_legend(byrow = TRUE)) + labs(col=none) + ylim(c(0.7,1))
+
+p.corr<-ggplot(data=data_evo_rm_rAX4, aes(x=mean_spef, y=mean_germ,col=evol_group)) + geom_smooth(method='lm',col="black", lwd=0.5,fill="grey") + geom_point() + xlab('Sporulation Efficiency') + ylab('Germination Efficiency') + scale_colour_manual(values=colours) + theme_cowplot() + theme(legend.position = c(0.8,0.85),legend.key.size = unit(0.3,"cm"), legend.text = element_text(size=6), legend.title=element_blank(),legend.spacing.y = unit(0, 'cm')) + guides(fill = guide_legend(byrow = TRUE)) + labs(col=none) + ylim(c(0.7,1))
+
+```
+
+```{r}
+
+
+p.top = plot_grid(p.dt, p.spef, labels=c("A", "B"), align="h", axis="b")
+p.bottom = plot_grid(p.germ, p.corr, align="h", axis="b", labels=c("C", "D"))
+p.all = plot_grid(p.top,p.bottom, ncol=1)
+save_plot("figures/Figure_7.pdf", p.all,base_height=7, base_width=7)
+```
+
+Calculate mean cheating ability
+```{r}
+
+mean_cheat = resist %>% group_by(strain_gfp, strain_unl) %>% summarise(mean_spores_gfp = mean(spores_prct_gfp)) %>% group_by(strain_gfp) %>% summarise(gd_mean_spores_gfp = mean(mean_spores_gfp))
+
+d=merge(data_all, mean_cheat, by.x="strain", by.y="strain_gfp")
+names(d)[6] = "mean_cheat"
+cor.test(d$mean_spef,d$mean_cheat)  # r = 0.81, p<0.0001
+cor.test(d$mean_cheat, d$mean_germ) # r = -0.22, p=0.25 
+cor.test(d$mean_cheat, d$mean_dt)   # r = 0.25, p=0.18
+cor.test(d$mean_spef, d$mean_germ)  # r = -0.24, p=0.21 (same as above)
+
+```
+
+Statistics - germination
+```{r}
+germ_raw_evol_only = germ_raw %>% filter(., grepl("r",strain)) 
+
+m.germ = glmmTMB(prct_germ ~ (1|strain) + evol_group + (1|block), data=germ_raw_evol_only, family=beta_family(link="logit"))
+
+summary(m.germ)
+drop1(m.germ, test="Chisq") # group is significant
+emmeans(m.germ, specs = pairwise ~ evol_group)
+
+
+# Drop strain
+m1.germ = glmmTMB(prct_germ ~ (1|strain) + evol_group + (1|block), data=germ_raw_evol_only, family=beta_family(link="logit"))
+anova(m.germ, m1.germ, test="Chisq") # strain is NS
+
+# For posthoc testing that rAX4 is different from rCDs
+germ_raw_evol_only = germ_raw_evol_only %>% mutate(mixtype = case_when(
+  evol_group == "AX4" ~ "no_cheater", 
+              evol_group !="AX4" ~ "cheater"))
+m.germ = glmmTMB(prct_germ ~ (1|strain) + mixtype + (1|block), data=germ_raw_evol_only, family=beta_family(link="logit"))
+
+emmeans(m.germ, specs = trt.vs.ctrl ~ mixtype)
+
+```
+
+Statistics - sporulation efficiency
+```{r}
+
+spef_raw_evol_only = spef_raw %>% filter(., grepl("r",strain)) 
+
+m.spef = glmmTMB(spef ~ (1|strain) + evol_partner + (1|expt_date), data=spef_raw_evol_only)
+
+summary(m.spef)
+drop1(m.spef, test="Chisq") # evol_partner is NS
+
+# Drop strain
+m1.spef = glmmTMB(spef ~ evol_partner + (1|expt_date), data=spef_raw_evol_only)
+anova(m.spef, m1.spef, test="Chisq") # strain is significant
+emmeans(m.spef, specs = pairwise ~ evol_partner) # CD3 is different from CD4; all else NS
+
+```
+
+Statistics - doubling time 
+```{r}
+
+dt_raw_evol_only = dt %>% filter(., grepl("r",strain)) 
+
+m.dt = glmmTMB(dt ~ (1|strain) + evol_group + (1|rep), data=dt_raw_evol_only)
+
+summary(m.dt)
+drop1(m.dt, test="Chisq") # evol_group is NS
+
+# Drop strain
+m1.dt = glmmTMB(dt ~ evol_group + (1|rep), data=dt_raw_evol_only)
+anova(m.dt, m1.dt, test="Chisq") # strain is NS
+emmeans(m.dt, specs = pairwise ~ evol_group) # all strains NS
+
+```
+
