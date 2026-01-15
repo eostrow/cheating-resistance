@@ -1,14 +1,5 @@
 ## README
 
-Please include the following in the file: Title of the study, Short summary of 
-the study, Code and package versions (e.g., Git fingerprint, manual version 
-number, R session info output), Overview of folders/files and their contents, 
-Instructions for users to run the software (e.g. explain the project workflow 
-and any configuration parameters of your software), 
-Links to protocols.io or equivalent methods repositories, where applicable. 
-Once a paper is accepted, please include author names, contact details, 
-links to preprint and the publication (initial README should be anonymised for peer review).
-
 This repository contains all data to create the manuscript figures 
 and statistical analyses for the manuscript.
 
