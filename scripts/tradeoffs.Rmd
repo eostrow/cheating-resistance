@@ -10,8 +10,7 @@ editor_options:
 Load packages
 ```{r}
 library(tidyverse)
-require(ggplot2)
-require(cowplot)
+library(cowplot)
 library(glmmTMB)
 library(emmeans)
 
